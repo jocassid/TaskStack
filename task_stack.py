@@ -1,53 +1,136 @@
 #!/usr/bin/env python3
 
+from datetime import datetime
+from sqlite3 import connect as sqlite_connect
 from tkinter import Tk, LEFT, X, END, messagebox, ttk, font, Label
 from tkinter.messagebox import showwarning
-import sqlite3
+from typing import Optional
 
-def init_db():
-    conn = sqlite3.connect("tasks.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            completed_at TIMESTAMP
+from db_migrations import ALL_MIGRATIONS
+
+
+class Task:
+    def __init__(
+            self,
+            name: str,
+            created_at: Optional[datetime] = None,
+            position: int = 0,
+            completed_at: Optional[datetime] = None,
+    ):
+        self.id = None
+        self.name = name
+        self.created_at = created_at or datetime.now()
+        self.position = position
+        self.completed_at = completed_at
+
+
+
+
+
+
+class Database:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.conn = None
+        self.cursor = None
+
+    def __enter__(self):
+        self.conn = sqlite_connect(self.db_path)
+        self.conn.__enter__()
+
+        self.cursor = self.conn.cursor()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.conn.__exit__(exc_type, exc_value, traceback)
+
+    def setup(self):
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                position INTEGER
+            )
+        """)
+        self.conn.commit()
+
+        for migration in ALL_MIGRATIONS:
+            migration(self.conn, self.cursor)
+            self.conn.commit()
+
+    def add_task(self,name: str):
+        if not name.strip():
+            return
+
+        # Get the current maximum position to assign the next one
+        self.cursor.execute("SELECT MAX(position) FROM tasks")
+        max_pos = self.cursor.fetchone()[0]
+        new_pos = (max_pos + 1) if max_pos is not None else 1
+
+        self.cursor.execute(
+            "INSERT INTO tasks (name, position) VALUES (?, ?)",
+            (name, new_pos),
         )
-    """)
-    conn.commit()
-    conn.close()
+        self.conn.commit()
 
-def add_task(name):
-    if not name.strip():
-        return
-    conn = sqlite3.connect("tasks.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO tasks (name) VALUES (?)", (name,))
-    conn.commit()
-    conn.close()
+    def get_top_tasks(self, limit=5):
+        # Only get tasks that are not completed, ordered by position
+        # Higher position means it's lower in the list if we want it to behave like a stack?
+        # Actually, usually "Up" means moving it towards the top of the list (lower index/higher priority).
+        # Let's say we order by position DESC so that newest/highest position is at the top.
+        self.cursor.execute(
+            "SELECT id, name FROM tasks WHERE completed_at IS NULL ORDER BY position DESC LIMIT ?",
+            (limit,),
+        )
+        tasks = self.cursor.fetchall()
+        return tasks
 
-def get_top_tasks(limit=5):
-    conn = sqlite3.connect("tasks.db")
-    cursor = conn.cursor()
-    # Only get tasks that are not completed
-    cursor.execute("SELECT id, name FROM tasks WHERE completed_at IS NULL ORDER BY id DESC LIMIT ?", (limit,))
-    tasks = cursor.fetchall()
-    conn.close()
-    return tasks
+    def mark_task_complete(self, task_id):
+        self.cursor.execute(
+            "UPDATE tasks SET completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (task_id,),
+        )
+        self.conn.commit()
 
-def mark_task_complete(task_id):
-    conn = sqlite3.connect("tasks.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE tasks SET completed_at = CURRENT_TIMESTAMP WHERE id = ?", (task_id,))
-    conn.commit()
-    conn.close()
+    def move_task(self, task_id, direction):
+        """Move task up or down by swapping positions with the adjacent task."""
+
+        # Get current task position
+        self.cursor.execute("SELECT position FROM tasks WHERE id = ?", (task_id,))
+        current_pos = self.cursor.fetchone()[0]
+
+        if direction == "up":
+            # Moving "up" means finding the task with the smallest position that is greater than current_pos
+            # because we are ordering by position DESC
+            self.cursor.execute("""
+                SELECT id, position FROM tasks 
+                WHERE completed_at IS NULL AND position > ? 
+                ORDER BY position LIMIT 1
+            """, (current_pos,))
+        else:
+            # Moving "down" means finding the task with the largest position that is smaller than current_pos
+            self.cursor.execute("""
+                SELECT id, position FROM tasks 
+                WHERE completed_at IS NULL AND position < ? 
+                ORDER BY position DESC LIMIT 1
+            """, (current_pos,))
+
+        other_task = self.cursor.fetchone()
+        if other_task:
+            other_id, other_pos = other_task
+            # Swap positions
+            self.cursor.execute("UPDATE tasks SET position = ? WHERE id = ?", (other_pos, task_id))
+            self.cursor.execute("UPDATE tasks SET position = ? WHERE id = ?", (current_pos, other_id))
+            self.conn.commit()
 
 
 class TaskFrame(ttk.Frame):
-    def __init__(self, parent, on_complete):
+    def __init__(self, parent, on_complete, on_move):
         super().__init__(parent)
         self.on_complete = on_complete
+        self.on_move = on_move
         self.columnconfigure(0, weight=1)
         self.labels = []
 
@@ -62,17 +145,40 @@ class TaskFrame(ttk.Frame):
             lbl.grid(row=i, column=0, sticky="w", padx=5, pady=2)
             self.labels.append(lbl)
 
-            btn = ttk.Button(
-                self, 
-                text="Done",
+            done_btn = ttk.Button(
+                self,
+                text="✔",
                 command=lambda tid=task_id: self.on_complete(tid)
             )
-            btn.grid(row=i, column=1, padx=5, pady=2)
+            done_btn.grid(row=i, column=1, padx=2, pady=2)
+
+            # Move Up button
+            up_btn = ttk.Button(
+                self,
+                text="↑",
+                width=3,
+                command=lambda tid=task_id: self.on_move(tid, "up")
+            )
+            up_btn.grid(row=i, column=2, padx=2, pady=2)
+
+            # Move Down button
+            down_btn = ttk.Button(
+                self,
+                text="↓",
+                width=3,
+                command=lambda tid=task_id: self.on_move(tid, "down")
+            )
+            down_btn.grid(row=i, column=3, padx=2, pady=2)
+
+
+
 
 
 class TaskStackApp:
-    def __init__(self, root):
+    def __init__(self, root, database: Database):
         self.root = root
+        self.database = database
+
         self.root.title("Task Stack")
         
         self.input_frame = ttk.Frame(root)
@@ -85,7 +191,7 @@ class TaskStackApp:
         self.new_task_button = ttk.Button(self.input_frame, text="New task", command=self.handle_new_task)
         self.new_task_button.pack(side=LEFT, padx=5)
         
-        self.tasks_frame = TaskFrame(root, self.complete_task)
+        self.tasks_frame = TaskFrame(root, self.complete_task, self.move_task)
         self.tasks_frame.pack(pady=5, padx=10, fill=X)
         
         self.selection_index = -1
@@ -98,7 +204,7 @@ class TaskStackApp:
     def handle_new_task(self):
         name = self.new_task_description.get()
         if name.strip():
-            add_task(name)
+            self.database.add_task(name)
             self.new_task_description.delete(0, END)
             self.refresh_list()
         else:
@@ -143,20 +249,27 @@ class TaskStackApp:
             self.tasks_frame.labels[self.selection_index].focus_set()
 
     def refresh_list(self):
-        tasks = get_top_tasks(5)
+        tasks = self.database.get_top_tasks(5)
         self.tasks_frame.refresh(tasks)
         self.selection_index = -1
         self.update_selection()
 
     def complete_task(self, task_id):
-        mark_task_complete(task_id)
+        self.database.mark_task_complete(task_id)
+        self.refresh_list()
+
+    def move_task(self, task_id, direction):
+        self.database.move_task(task_id, direction)
         self.refresh_list()
 
 def main():
-    init_db()
-    root = Tk()
-    TaskStackApp(root)
-    root.mainloop()
+
+    with Database("tasks.db") as db:
+        db.setup()
+
+        root = Tk()
+        TaskStackApp(root, db)
+        root.mainloop()
 
 if __name__ == "__main__":
     main()

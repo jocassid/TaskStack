@@ -6,26 +6,33 @@ from tkinter import Tk, LEFT, X, END, messagebox, ttk, font, Label
 from tkinter.messagebox import showwarning
 from typing import Optional
 
+from sqlalchemy import (
+    DateTime,
+    func,
+    Integer,
+    String,
+)
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+)
+
 from db_migrations import ALL_MIGRATIONS
 
 
-class Task:
-    def __init__(
-            self,
-            name: str,
-            created_at: Optional[datetime] = None,
-            position: int = 0,
-            completed_at: Optional[datetime] = None,
-    ):
-        self.id = None
-        self.name = name
-        self.created_at = created_at or datetime.now()
-        self.position = position
-        self.completed_at = completed_at
+class Base(DeclarativeBase):
+    pass
 
 
+class Task(Base):
+    __tablename__ = "task"
 
-
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=True)
 
 
 class Database:

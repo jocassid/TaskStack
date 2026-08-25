@@ -1,0 +1,2 @@
+
+MAX_TASKS_TO_DISPLAY: int = 10

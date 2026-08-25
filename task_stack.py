@@ -6,13 +6,10 @@ setup()
 
 if True:
 
-    from tkinter import Tk, X, END, messagebox, ttk, font, Label
+    from tkinter import Tk, X, END, ttk, font, Label
     from tkinter.constants import LEFT
-    from tkinter.messagebox import showwarning
-    from typing import Any, Iterable, Optional
-    from types import ModuleType
+    from typing import Iterable
 
-    from django.db import transaction
     from django.db.models import Max
     from django.utils import timezone
 
@@ -99,8 +96,6 @@ class TaskGrid(ttk.Frame):
         task.move_task_position(direction)
         self.refresh_list()
 
-
-
     def add_task(self, name: str):
         max_position = Task.objects.aggregate(Max('position'))['position__max']
         new_position = (max_position + 1) if max_position is not None else 1
@@ -154,6 +149,7 @@ class TaskGrid(ttk.Frame):
 
 class TaskStackApp:
     def __init__(self, root):
+
         self.root = root
         self.root.title("Task Stack")
 
@@ -190,8 +186,8 @@ class TaskStackApp:
         self.tasks_grid.refresh_list()
 
     def focus_new_task(self, event=None):
-        self.selection_index = -1
-        self.update_selection()
+        self.tasks_grid.selection_index = -1
+        self.tasks_grid.update_selection()
 
     def focus_new_task_description(self) -> None:
         self.new_task_description.focus_set()

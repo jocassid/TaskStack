@@ -1,24 +1,48 @@
-
+from html.parser import incomplete
+from typing import Iterable, Iterator
 
 from django.db.models import (
+    CASCADE,
     CharField,
     DateTimeField,
+    ForeignKey,
     IntegerField,
     Model,
 )
 from django.db.transaction import atomic
 
 
-class Task(Model):
+class GoalTaskFields(Model):
+
+    class Meta:
+        abstract = True
 
     name = CharField(max_length=30)
     created_at = DateTimeField(auto_now_add=True)
     completed_at = DateTimeField(null=True, blank=True)
     position = IntegerField(null=True, blank=True)
 
-    class Meta:
-        db_table = 'task'
-        app_label = 'task_stack'
+
+class Goal(GoalTaskFields):
+
+    def get_goals_and_tasks(self) -> Iterator[tuple["Goal", list["Task"]]]:
+        incomplete_goals = Goal.objects.filter(completed_at__isnull=True)
+        remaining_goals = incomplete_goals.count()
+
+
+        goals = incomplete_goals.prefetch_related('tasks').order_by('position')
+        for goal in goals:
+
+            yield goal, goal.tasks.filter().order_by('position')
+
+
+class Task(GoalTaskFields):
+
+    goal = ForeignKey(
+        Goal,
+        on_delete=CASCADE,
+        related_name='tasks',
+    )
 
     def move_task_position(self, direction: str):
         queryset = Task.objects.filter(completed_at__isnull=True)
@@ -44,3 +68,7 @@ class Task(Model):
             )
             self.save()
             other_task.save()
+
+
+
+

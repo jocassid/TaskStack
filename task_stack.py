@@ -1,41 +1,22 @@
 #!/usr/bin/env python3
 
-from datetime import datetime
-from sqlite3 import connect as sqlite_connect
-from tkinter import Tk, X, END, messagebox, ttk, font, Label
-from tkinter.constants import LEFT
-from tkinter.messagebox import showwarning
-from typing import Any, Iterable, Optional
-
-from sqlalchemy import (
-    create_engine,
-    DateTime,
-    Engine,
-    func,
-    Integer,
-    String,
-    select,
-)
-from sqlalchemy.orm import (
-    DeclarativeBase,
-    Mapped,
-    mapped_column, 
-    Session,
-)
+from django import setup
+setup()
 
 
-class Base(DeclarativeBase):
-    pass
+if True:
 
+    from tkinter import Tk, X, END, messagebox, ttk, font, Label
+    from tkinter.constants import LEFT
+    from tkinter.messagebox import showwarning
+    from typing import Any, Iterable, Optional
+    from types import ModuleType
 
-class Task(Base):
-    __tablename__ = "task"
+    from django.db import transaction
+    from django.db.models import Max
+    from django.utils import timezone
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(30))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    position: Mapped[int] = mapped_column(Integer, nullable=True)
+    from main.models import Task
 
 
 class TaskRow:
@@ -88,11 +69,10 @@ class TaskRow:
 
 
 class TaskGrid(ttk.Frame):
-    def __init__(self, app: "TaskStackApp", session: Session):
+    def __init__(self, app: "TaskStackApp"):
         super().__init__(app.root)
         self.app: "TaskStackApp" = app
         self.columnconfigure(0, weight=1)
-        self.session = session
         self.rows: list[TaskRow] = []
         self.selection_index = -1
 
@@ -111,63 +91,23 @@ class TaskGrid(ttk.Frame):
             )
 
     def complete_task(self, task: Task):
-        task.completed_at = datetime.now()
-        self.session.commit()
+        task.completed_at = timezone.now()
+        task.save()
         self.refresh_list()
 
     def move_task(self, task: Task, direction):
-        self.move_task_position(task, direction)
+        task.move_task_position(direction)
         self.refresh_list()
 
-    def move_task_position(self, current_task: Task, direction: str):
 
-        where_args: list[Any] = [Task.completed_at.is_(None)]
-
-        if direction == 'up':
-            where_args.append(Task.position > current_task.position)
-            sort_expr = Task.position.asc()
-        else:
-            where_args.append(Task.position < current_task.position)
-            sort_expr = Task.position.desc()
-
-        other_task = self.session.scalar(
-            select(
-                Task
-            ).where(
-                *where_args
-            ).order_by(
-                sort_expr
-            )
-        )
-
-        if other_task is None:
-            return
-
-        current_task.position, other_task.position = (
-            other_task.position,
-            current_task.position,
-        )
-        self.session.commit()
 
     def add_task(self, name: str):
-        max_position: int | None = self.session.scalar(
-            select(func.max(Task.position))
-        )
+        max_position = Task.objects.aggregate(Max('position'))['position__max']
         new_position = (max_position + 1) if max_position is not None else 1
-
-        self.session.add(
-            Task(name=name, position=new_position)
-        )
-        self.session.commit()
+        Task.objects.create(name=name, position=new_position)
 
     def get_top_tasks(self, limit=5) -> list[Task]:
-        results = self.session.scalars(
-            select(Task)
-            .where(Task.completed_at.is_(None))
-            .order_by(Task.position.desc())
-            .limit(limit)
-        )
-        return [t for t in results]
+        return list(Task.objects.filter(completed_at__isnull=True).order_by('-position')[:limit])
 
     def refresh_list(self):
         tasks = self.get_top_tasks(5)
@@ -213,7 +153,7 @@ class TaskGrid(ttk.Frame):
 
 
 class TaskStackApp:
-    def __init__(self, root, session: Session):
+    def __init__(self, root):
         self.root = root
         self.root.title("Task Stack")
 
@@ -231,7 +171,7 @@ class TaskStackApp:
         )
         self.new_task_button.pack(side=LEFT, padx=5)
 
-        self.tasks_grid = TaskGrid(self, session)
+        self.tasks_grid = TaskGrid(self)
         self.tasks_grid.pack(pady=5, padx=10, fill=X)
 
         self.root.bind_all("<Control-t>", self.focus_new_task)
@@ -259,12 +199,9 @@ class TaskStackApp:
 
 
 def main():
-
-    engine: Engine = create_engine("sqlite:///tasks.db", echo=True)
-    with Session(engine) as session:
-        root = Tk()
-        TaskStackApp(root, session)
-        root.mainloop()
+    root = Tk()
+    TaskStackApp(root)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()

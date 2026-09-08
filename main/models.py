@@ -34,6 +34,9 @@ class GoalAndTasks:
     goal: 'Goal'
     tasks: list['Task']
 
+    def unpack(self) -> tuple['Goal', list['Task']]:
+        return self.goal, self.tasks
+
 
 class Goal(GoalTaskFields):
 
@@ -97,6 +100,9 @@ class Goal(GoalTaskFields):
 
 
 class Task(GoalTaskFields):
+
+    class Meta:
+        unique_together = ('goal', 'position')
 
     goal = ForeignKey(
         Goal,

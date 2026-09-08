@@ -1,6 +1,9 @@
-from html.parser import incomplete
+
+from collections import defaultdict
+from dataclasses import dataclass
 from typing import Iterable, Iterator
 
+from django.conf import settings
 from django.db.models import (
     CASCADE,
     CharField,
@@ -22,18 +25,75 @@ class GoalTaskFields(Model):
     completed_at = DateTimeField(null=True, blank=True)
     position = IntegerField(null=True, blank=True)
 
+    def __str__(self):
+        return self.name
+
+
+@dataclass
+class GoalAndTasks:
+    goal: 'Goal'
+    tasks: list['Task']
+
 
 class Goal(GoalTaskFields):
 
-    def get_goals_and_tasks(self) -> Iterator[tuple["Goal", list["Task"]]]:
-        incomplete_goals = Goal.objects.filter(completed_at__isnull=True)
-        remaining_goals = incomplete_goals.count()
+    @staticmethod
+    def get_goals_and_tasks_to_display() -> list[GoalAndTasks]:
 
+        tasks_by_goal: list[GoalAndTasks] = []
 
-        goals = incomplete_goals.prefetch_related('tasks').order_by('position')
-        for goal in goals:
+        total_goals: int = 0
+        total_tasks: int = 0
+        goals_queryset = Goal.objects.filter(
+            completed_at__isnull=True,
+        ).prefetch_related(
+            'tasks'
+        ).order_by('position')
+        for goal in goals_queryset:
+            total_goals += 1
+            tasks = list(
+                goal.tasks.filter(
+                    completed_at__isnull=True,
+                ).order_by('position')
+            )
+            task_count: int = len(tasks)
+            total_tasks += task_count
+            tasks_by_goal.append(GoalAndTasks(goal, tasks))
 
-            yield goal, goal.tasks.filter().order_by('position')
+        min_tasks_by_index = {0: 3, 1: 2}
+
+        max_tasks_to_display = settings.MAX_TASKS_TO_DISPLAY
+        if total_goals >= max_tasks_to_display:
+            for i, goal_and_tasks in enumerate(tasks_by_goal):
+                limit = min_tasks_by_index.get(i, 1)
+                goal_and_tasks.tasks = goal_and_tasks.tasks[:limit]
+            return tasks_by_goal
+
+        if total_tasks <= max_tasks_to_display:
+            return tasks_by_goal
+
+        tasks_by_goal_len = len(tasks_by_goal)
+        for forward_index in range(tasks_by_goal_len):
+            reverse_index = (tasks_by_goal_len - 1) - forward_index
+            goal_and_tasks = tasks_by_goal[reverse_index]
+            min_tasks_for_goal = min_tasks_by_index.get(reverse_index, 1)
+            num_tasks_for_goal = len(goal_and_tasks.tasks)
+            number_to_remove = num_tasks_for_goal - min_tasks_for_goal
+            if number_to_remove < 1:
+                # We cannot remove any tasks from this goal
+                continue
+            # If we can get down to max_tasks_to_display by removing tasks
+            # from this Goal.  Only remove enough tasks to do so.
+            number_to_remove = min(
+                number_to_remove,
+                total_tasks - max_tasks_to_display,
+            )
+            goal_and_tasks.tasks = goal_and_tasks.tasks[:-number_to_remove]
+            total_tasks -= number_to_remove
+            if total_tasks <= max_tasks_to_display:
+                break
+
+        return tasks_by_goal
 
 
 class Task(GoalTaskFields):
